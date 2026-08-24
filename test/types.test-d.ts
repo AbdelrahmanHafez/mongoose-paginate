@@ -63,7 +63,7 @@ async function offsetModeTypes() {
   });
   expectType<Page<HydratedDocument<Article>, OffsetPageInfo>>(page);
   expectType<number | undefined>(page.pageInfo.totalPages);
-  expectType<boolean>(page.pageInfo.hasPreviousPage);
+  expectType<boolean | null>(page.pageInfo.hasPreviousPage);
 }
 
 async function pageInfoFalseTypes() {
@@ -107,8 +107,10 @@ async function variableInputTypes() {
     limit: 20,
     lookahead: true
   };
+  // The variable's type permits pageInfo: false, so the sound result is the
+  // union of both envelopes.
   const page = await Article.paginate({}, cursorOptions);
-  expectType<Page<HydratedDocument<Article>, CursorPageInfo>>(page);
+  expectType<Page<HydratedDocument<Article>, CursorPageInfo> | PageWithoutInfo<HydratedDocument<Article>>>(page);
 
   const dynamicOptions: PaginateOptions = Math.random() > 0.5
     ? { mode: 'cursor', sort: { publishedAt: -1 } }

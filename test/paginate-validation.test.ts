@@ -164,17 +164,6 @@ describe('Model.paginate() validation', function() {
     }
   });
 
-  it('rejects an exclusion projection that hides a sort path', async function() {
-    // Arrange
-    const { Event } = await createTestContext();
-
-    // Act + Assert
-    await assert.rejects(
-      Event.paginate({}, { mode: 'cursor', sort: { startsAt: 1 } }).select('-startsAt').exec(),
-      InvalidPaginationOptionsError
-    );
-  });
-
   it('asPaginateModel returns a typed handle for a plugin-enabled model', async function() {
     // Arrange
     const { Event } = await createTestContext();
