@@ -41,6 +41,9 @@ const page = await Post.paginate({ status: 'published' }, {
 page.docs;                    // up to 20 documents
 page.pageInfo.nextCursor;     // opaque string for the next request
 page.pageInfo.hasNextPage;    // true, false, or null
+
+// A direction's cursor is null when that direction is proven empty.
+// When existence is unknown, the cursor stays usable.
 ```
 
 Pass `before` instead of `after` to move backward. The documents come back in
@@ -95,7 +98,9 @@ work is opt-in:
 
 Without lookahead, page existence uses three states. A short page proves
 `false`. A full page reports `null`, which means the query did not do enough
-work to know. The API never reports a guess as a fact.
+work to know. The API never reports a guess as a fact. This also holds in
+offset mode: an empty page beyond the data reports `hasPreviousPage: null`
+unless an exact count proves the answer.
 
 Cursor mode never exposes `totalPages`. A page count needs a full count and a
 stable page size, and both fight the reasons to use cursors.
@@ -140,6 +145,7 @@ Strict consumers can use the runtime-checked helper instead:
 import { asPaginateModel } from '@abdelrahmanhafez/mongoose-paginate';
 
 const TypedPost = asPaginateModel(Post); // throws if the plugin is missing
+// TypedPost keeps the full model surface, such as find() and create().
 ```
 
 `lean()`, `populate()`, and `select()` keep their type effects inside
@@ -155,12 +161,15 @@ const TypedPost = asPaginateModel(Post); // throws if the plugin is missing
   tie-breaker.
 - **Counts are separate reads.** The find and the count run as two queries.
   They are not snapshot consistent. Documents can change between them unless
-  you supply suitable transaction semantics through `.session()`.
+  you supply suitable transaction semantics through `.session()`. The count
+  reuses the session, collation, hint, and time limit of the find.
 - **Offset pages shift.** Inserts and deletes between requests move offset
   boundaries. That is inherent to skip and limit, not to this API.
-- **Projections.** When metadata is on, the paginator adds the sort paths to
-  an inclusive projection, because cursors need those values. Excluding a
-  sort path throws.
+- **Projections.** Your projection is returned unchanged. When it hides a
+  sort path, the paginator reads the boundary values with one extra query by
+  `_id`. That extra read is small, but it is not snapshot consistent with
+  the page. A projection that excludes `_id` and hides a sort path cannot
+  produce cursors and throws. Use `pageInfo: false` to skip cursor work.
 
 ## Implemented here
 
@@ -169,6 +178,7 @@ const TypedPost = asPaginateModel(Post); // throws if the plugin is missing
 - One effective sort for order, cursor filter, and cursor encoding
 - `_id` tie-breaker with an explicit opt-out
 - Versioned opaque cursors bound to sort and collation, with schema casting
+- Projection-preserving cursor encoding for hydrated and lean results
 - Null-aware traversal, forward and backward, in canonical order
 - Tri-state page existence with explicit lookahead
 - Explicit counts, `pageInfo: false`, and option conflict validation
