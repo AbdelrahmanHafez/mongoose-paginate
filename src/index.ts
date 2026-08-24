@@ -2,7 +2,7 @@ import './augment.js';
 
 export { mongoosePaginate } from './plugin.js';
 export { PaginateQuery, type PaginateLean } from './paginate-query.js';
-export { asPaginateModel, MissingPaginatePluginError, type PaginateModel } from './typed-model.js';
+export { asPaginateModel, MissingPaginatePluginError, type PaginateModel, type PaginateMethod } from './typed-model.js';
 export {
   PaginationError,
   InvalidPaginationOptionsError,
