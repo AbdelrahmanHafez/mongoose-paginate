@@ -221,12 +221,19 @@ function resolveExecutionState(
     { tieBreaker: options.tieBreaker !== false }
   );
 
+  const baseFilter = structuredClone(query.getFilter()) as Record<string, unknown>;
+  if (options.count === 'estimated' && Object.keys(baseFilter).length > 0) {
+    throw new InvalidPaginationOptionsError(
+      'count: "estimated" needs an empty filter. Estimated counts come from collection metadata.'
+    );
+  }
+
   return {
     effectiveSort,
     limit,
     wantPageInfo: options.pageInfo !== false,
     collation: (queryOptions.collation as Record<string, unknown> | undefined) ?? null,
-    baseFilter: structuredClone(query.getFilter()) as Record<string, unknown>,
+    baseFilter,
     session: (queryOptions.session as ClientSession | undefined) ?? null
   };
 }
@@ -424,14 +431,24 @@ function ensureSortPathsSelected(query: Query<unknown[], any>, sort: SortField[]
     return;
   }
 
-  const inclusive = Object.entries(projection).some(
-    ([path, value]) => path !== '_id' && (value === 1 || value === true)
-  );
+  // String selects such as '-startsAt' keep the sign in the projection key,
+  // so normalize keys before reading inclusion state.
+  const normalized = new Map<string, boolean>();
+  for (const [rawPath, value] of Object.entries(projection)) {
+    const excludedBySign = rawPath.startsWith('-');
+    const path = rawPath.replace(/^[+-]/, '');
+    normalized.set(path, !excludedBySign && (value === 1 || value === true));
+  }
+
+  const inclusive = [...normalized.entries()].some(([path, included]) => path !== '_id' && included);
   for (const field of sort) {
-    const value = projection[field.path];
-    if (inclusive && value == null) {
-      query.select({ [field.path]: 1 } as never);
-    } else if (!inclusive && (value === 0 || value === false)) {
+    if (!normalized.has(field.path)) {
+      if (inclusive) {
+        query.select({ [field.path]: 1 } as never);
+      }
+      continue;
+    }
+    if (!normalized.get(field.path)) {
       throw new InvalidPaginationOptionsError(
         `Cannot exclude sort path "${field.path}" from the projection. ` +
         'Cursor encoding needs every effective sort value.'
@@ -446,11 +463,6 @@ async function runCount(
   state: ExecutionState
 ): Promise<number> {
   if (count === 'estimated') {
-    if (Object.keys(state.baseFilter).length > 0) {
-      throw new InvalidPaginationOptionsError(
-        'count: "estimated" needs an empty filter. Estimated counts come from collection metadata.'
-      );
-    }
     return await model.estimatedDocumentCount();
   }
 
