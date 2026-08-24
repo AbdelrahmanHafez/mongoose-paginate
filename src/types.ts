@@ -64,7 +64,7 @@ export interface OffsetPageInfo {
   page: number;
   limit: number;
   hasNextPage: boolean | null;
-  hasPreviousPage: boolean;
+  hasPreviousPage: boolean | null;
   totalDocs?: number;
   totalPages?: number;
 }

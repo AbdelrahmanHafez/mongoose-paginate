@@ -23,17 +23,22 @@ describe('review regressions', function() {
   it('keeps the requested inclusive projection in lean documents', async function() {
     // Arrange
     const { Post } = createTestContext();
-    await Post.create({ title: 'projected', score: 1 });
+    await Post.create([{ title: 'projected', score: 1 }, { title: 'later', score: 2 }]);
 
     // Act
-    const page = await Post.paginate({}, { mode: 'cursor', sort: { score: 1 } })
+    const page = await Post.paginate({}, { mode: 'cursor', sort: { score: 1 }, limit: 1 })
       .select('title')
       .lean();
 
-    // Assert
+    // Assert: the document keeps the requested shape, and the cursor still
+    // works even though it needs the hidden score value.
     assert.strictEqual(page.docs[0]!.title, 'projected');
     assert.ok(!('score' in page.docs[0]!));
     assert.notStrictEqual(page.pageInfo.nextCursor, null);
+    const nextPage = await Post.paginate({}, {
+      mode: 'cursor', sort: { score: 1 }, limit: 1, after: page.pageInfo.nextCursor!
+    });
+    assert.deepStrictEqual(nextPage.docs.map(doc => doc.title), ['later']);
   });
 
   it('supports an exclusion projection that hides a sort path', async function() {
@@ -57,14 +62,14 @@ describe('review regressions', function() {
   });
 
   it('rejects a projection that excludes _id when metadata needs cursors', async function() {
-    // Arrange
+    // Arrange: two documents and limit 1, so the page must encode a cursor.
     const { Post } = createTestContext();
-    await Post.create({ title: 'a', score: 1 });
+    await Post.create([{ title: 'a', score: 1 }, { title: 'b', score: 2 }]);
 
     // Act + Assert: without _id the paginator cannot identify boundary
     // documents, so it refuses instead of encoding a corrupt cursor.
     await assert.rejects(
-      Post.paginate({}, { mode: 'cursor', sort: { score: 1 } })
+      Post.paginate({}, { mode: 'cursor', sort: { score: 1 }, limit: 1 })
         .select({ title: 1, _id: 0 })
         .exec(),
       InvalidPaginationOptionsError
@@ -138,6 +143,21 @@ describe('review regressions', function() {
     // Assert
     assert.strictEqual(page.docs.length, 2);
     assert.strictEqual(page.pageInfo.totalDocs, 2);
+  });
+
+  it('rejects cleanly when the concurrent count query fails', async function() {
+    // Arrange: a hint for an index that does not exist makes both the find
+    // and the count fail. The count runs concurrently with the find, so its
+    // rejection must not escape as an unhandled rejection.
+    const { Post } = createTestContext();
+    await Post.create({ title: 'a', score: 1 });
+
+    // Act + Assert
+    await assert.rejects(
+      Post.paginate({}, { mode: 'offset', sort: { score: 1 }, count: 'exact' })
+        .hint({ doesNotExist: 1 })
+        .exec()
+    );
   });
 
   function createTestContext() {

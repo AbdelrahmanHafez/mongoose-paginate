@@ -82,13 +82,28 @@ function validateCollation(
   expectedCollation: Record<string, unknown> | null
 ): void {
   const cursorCollation = transport.collation ?? null;
-  const normalizedCursor = JSON.stringify(cursorCollation);
-  const normalizedExpected = JSON.stringify(expectedCollation ?? null);
-  if (normalizedCursor !== normalizedExpected) {
+  if (stableStringify(cursorCollation) !== stableStringify(expectedCollation ?? null)) {
     throw new InvalidCursorError(
       'Cursor collation does not match the query collation. A cursor is only valid for the collation that created it.'
     );
   }
+}
+
+/**
+ * Serializes with sorted object keys, so two collations with the same
+ * fields compare equal regardless of key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value == null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left < right ? -1 : 1)
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`);
+  return `{${entries.join(',')}}`;
 }
 
 function validateValues(transport: Record<string, unknown>, sort: SortField[]): unknown[] {

@@ -79,8 +79,10 @@ implements PromiseLike<PaginateEnvelope<TDoc, TPageInfo>> {
     return this as unknown as PaginateQuery<TRaw, MergePaths<TDoc, TPaths>, TPageInfo>;
   }
 
-  lean(): PaginateQuery<TRaw, PaginateLean<TRaw>, TPageInfo> {
-    this._query.lean();
+  lean(value: false): this;
+  lean(value?: true | Record<string, unknown>): PaginateQuery<TRaw, PaginateLean<TRaw>, TPageInfo>;
+  lean(value: boolean | Record<string, unknown> = true): this | PaginateQuery<TRaw, PaginateLean<TRaw>, TPageInfo> {
+    this._query.lean(value as never);
     return this as unknown as PaginateQuery<TRaw, PaginateLean<TRaw>, TPageInfo>;
   }
 
@@ -152,6 +154,8 @@ interface ExecutionState {
   collation: Record<string, unknown> | null;
   baseFilter: Record<string, unknown>;
   session: ClientSession | null;
+  maxTimeMS: number | null;
+  hint: Record<string, unknown> | string | null;
 }
 
 function validateOptions(options: PaginateOptions): void {
@@ -221,7 +225,10 @@ function resolveExecutionState(
     { tieBreaker: options.tieBreaker !== false }
   );
 
-  const baseFilter = structuredClone(query.getFilter()) as Record<string, unknown>;
+  // The query is already a clone, so its filter is independent from the
+  // caller's object. Keep the reference instead of copying: a structural
+  // copy would corrupt BSON values such as ObjectId and Decimal128.
+  const baseFilter = query.getFilter() as Record<string, unknown>;
   if (options.count === 'estimated' && Object.keys(baseFilter).length > 0) {
     throw new InvalidPaginationOptionsError(
       'count: "estimated" needs an empty filter. Estimated counts come from collection metadata.'
@@ -234,7 +241,9 @@ function resolveExecutionState(
     wantPageInfo: options.pageInfo !== false,
     collation: (queryOptions.collation as Record<string, unknown> | undefined) ?? null,
     baseFilter,
-    session: (queryOptions.session as ClientSession | undefined) ?? null
+    session: (queryOptions.session as ClientSession | undefined) ?? null,
+    maxTimeMS: (queryOptions.maxTimeMS as number | undefined) ?? null,
+    hint: (queryOptions.hint as Record<string, unknown> | string | undefined) ?? null
   };
 }
 
@@ -262,10 +271,6 @@ async function execCursor(
   const useLookahead = state.wantPageInfo && options.lookahead === true;
   query.limit(state.limit + (useLookahead ? 1 : 0));
 
-  if (state.wantPageInfo) {
-    ensureSortPathsSelected(query, state.effectiveSort);
-  }
-
   const fetched = await query.exec();
   const overflow = fetched.length > state.limit;
   const docs = fetched.slice(0, state.limit);
@@ -277,12 +282,34 @@ async function execCursor(
     return { docs };
   }
 
+  const existence = resolvePageExistence(
+    movement, cursor != null, fetched.length, state.limit, useLookahead, overflow
+  );
+
+  // A cursor for a direction that is proven empty would lead to an empty
+  // page, so return null there. An unknown direction keeps a usable cursor.
+  let nextCursor: string | null = null;
+  let previousCursor: string | null = null;
+  if (docs.length > 0 && (existence.hasNextPage !== false || existence.hasPreviousPage !== false)) {
+    const boundaries = await resolveBoundaryValues(model, query, state, docs);
+    if (existence.hasNextPage !== false) {
+      nextCursor = encodeCursor({
+        sort: state.effectiveSort, collation: state.collation, values: boundaries.last
+      });
+    }
+    if (existence.hasPreviousPage !== false) {
+      previousCursor = encodeCursor({
+        sort: state.effectiveSort, collation: state.collation, values: boundaries.first
+      });
+    }
+  }
+
   const pageInfo: CursorPageInfo = {
     mode: 'cursor',
     limit: state.limit,
-    nextCursor: makeCursor(docs[docs.length - 1], state),
-    previousCursor: makeCursor(docs[0], state),
-    ...resolvePageExistence(movement, cursor != null, fetched.length, state.limit, useLookahead, overflow)
+    nextCursor,
+    previousCursor,
+    ...existence
   };
 
   if (options.count != null) {
@@ -315,6 +342,10 @@ async function execOffset(
   const countPromise = state.wantPageInfo && options.count != null
     ? runCount(model, options.count, state)
     : null;
+  // The count runs concurrently with the find. Attach a no-op handler so an
+  // early count failure does not surface as an unhandled rejection while the
+  // find is still pending. Awaiting the original promise below still throws.
+  countPromise?.catch(() => undefined);
   const fetched = await query.exec();
   const overflow = fetched.length > state.limit;
   const docs = fetched.slice(0, state.limit);
@@ -336,12 +367,26 @@ async function execOffset(
     hasNextPage = null;
   }
 
+  // An empty page after the end of the data has no previous page unless
+  // earlier pages actually hold documents. Only an exact count proves that
+  // for an empty page.
+  let hasPreviousPage: boolean | null;
+  if (page === 1) {
+    hasPreviousPage = false;
+  } else if (docs.length > 0) {
+    hasPreviousPage = true;
+  } else if (options.count === 'exact' && totalDocs != null) {
+    hasPreviousPage = totalDocs > 0;
+  } else {
+    hasPreviousPage = null;
+  }
+
   const pageInfo: OffsetPageInfo = {
     mode: 'offset',
     page,
     limit: state.limit,
     hasNextPage,
-    hasPreviousPage: page > 1
+    hasPreviousPage
   };
   if (totalDocs != null) {
     pageInfo.totalDocs = totalDocs;
@@ -377,15 +422,122 @@ function resolvePageExistence(
   };
 }
 
-function makeCursor(doc: unknown, state: ExecutionState): string | null {
-  if (doc == null) {
-    return null;
+interface BoundaryValues {
+  first: unknown[];
+  last: unknown[];
+}
+
+/**
+ * Reads every effective sort value for the first and last documents of the
+ * page. The caller's projection is never modified. When the projection hides
+ * a sort path, the values come from one extra query by `_id`, so the
+ * returned documents keep exactly the shape the caller asked for.
+ */
+async function resolveBoundaryValues(
+  model: Model<any>,
+  query: Query<unknown[], any>,
+  state: ExecutionState,
+  docs: unknown[]
+): Promise<BoundaryValues> {
+  const provides = analyzeProjection(query);
+  const missing = state.effectiveSort.filter(field => !provides(field.path));
+  const first = docs[0];
+  const last = docs[docs.length - 1];
+
+  if (missing.length === 0) {
+    return {
+      first: state.effectiveSort.map(field => readPathValue(first, field.path)),
+      last: state.effectiveSort.map(field => readPathValue(last, field.path))
+    };
   }
-  const values = state.effectiveSort.map(field => readPathValue(doc, field.path));
-  return encodeCursor({ sort: state.effectiveSort, collation: state.collation, values });
+
+  if (!provides('_id')) {
+    throw new InvalidPaginationOptionsError(
+      'Cannot encode cursors because the projection excludes _id and hides a sort path. ' +
+      'Include _id, include every sort path, or use pageInfo: false.'
+    );
+  }
+
+  // The extra read is not snapshot consistent with the page. A concurrent
+  // update between the two queries can shift the encoded position.
+  const ids = [...new Set([readPathValue(first, '_id'), readPathValue(last, '_id')])];
+  const selection = Object.fromEntries(missing.map(field => [field.path, 1]));
+  const refetchQuery = model.find({ _id: { $in: ids } } as never).select(selection).lean();
+  if (state.session != null) {
+    refetchQuery.session(state.session);
+  }
+  const refetched = await refetchQuery.exec();
+  const byId = new Map(refetched.map(doc => [String(readPathValue(doc, '_id')), doc]));
+
+  const valuesFor = (doc: unknown): unknown[] => {
+    const hidden = byId.get(String(readPathValue(doc, '_id')));
+    return state.effectiveSort.map(field =>
+      provides(field.path) ? readPathValue(doc, field.path) : readPathValue(hidden, field.path)
+    );
+  };
+  return { first: valuesFor(first), last: valuesFor(last) };
+}
+
+type PathState = 'include' | 'exclude' | 'force';
+
+/**
+ * Returns a function that reports whether the query projection keeps a path
+ * in the returned documents. String selects such as '-score' keep the sign
+ * in the projection key, so keys are normalized first.
+ */
+function analyzeProjection(query: Query<unknown[], any>): (path: string) => boolean {
+  const projection = query.projection() as Record<string, unknown> | null | undefined;
+  if (projection == null) {
+    return () => true;
+  }
+
+  const states = new Map<string, PathState>();
+  for (const [rawPath, value] of Object.entries(projection)) {
+    const path = rawPath.replace(/^[+-]/, '');
+    if (rawPath.startsWith('+')) {
+      states.set(path, 'force');
+    } else if (rawPath.startsWith('-') || value === 0 || value === false) {
+      states.set(path, 'exclude');
+    } else if (value === 1 || value === true) {
+      states.set(path, 'include');
+    }
+  }
+
+  const inclusive = [...states.entries()].some(
+    ([path, pathState]) => path !== '_id' && pathState === 'include'
+  );
+
+  return (path: string): boolean => {
+    const selfOrAncestor = ancestorState(states, path);
+    if (selfOrAncestor === 'exclude') {
+      return false;
+    }
+    if (!inclusive) {
+      return true;
+    }
+    if (path === '_id') {
+      return true;
+    }
+    return selfOrAncestor != null;
+  };
+}
+
+function ancestorState(states: Map<string, PathState>, path: string): PathState | undefined {
+  const segments = path.split('.');
+  for (let end = segments.length; end >= 1; --end) {
+    const prefix = segments.slice(0, end).join('.');
+    const state = states.get(prefix);
+    if (state != null) {
+      return state;
+    }
+  }
+  return undefined;
 }
 
 function readPathValue(doc: unknown, path: string): unknown {
+  if (doc == null) {
+    return undefined;
+  }
   const getter = (doc as { get?: (path: string) => unknown }).get;
   if (typeof getter === 'function') {
     return getter.call(doc, path);
@@ -428,45 +580,15 @@ function castCursorValues(
   });
 }
 
-function ensureSortPathsSelected(query: Query<unknown[], any>, sort: SortField[]): void {
-  const projection = query.projection() as Record<string, unknown> | null | undefined;
-  if (projection == null) {
-    return;
-  }
-
-  // String selects such as '-startsAt' keep the sign in the projection key,
-  // so normalize keys before reading inclusion state.
-  const normalized = new Map<string, boolean>();
-  for (const [rawPath, value] of Object.entries(projection)) {
-    const excludedBySign = rawPath.startsWith('-');
-    const path = rawPath.replace(/^[+-]/, '');
-    normalized.set(path, !excludedBySign && (value === 1 || value === true));
-  }
-
-  const inclusive = [...normalized.entries()].some(([path, included]) => path !== '_id' && included);
-  for (const field of sort) {
-    if (!normalized.has(field.path)) {
-      if (inclusive) {
-        query.select({ [field.path]: 1 } as never);
-      }
-      continue;
-    }
-    if (!normalized.get(field.path)) {
-      throw new InvalidPaginationOptionsError(
-        `Cannot exclude sort path "${field.path}" from the projection. ` +
-        'Cursor encoding needs every effective sort value.'
-      );
-    }
-  }
-}
-
 async function runCount(
   model: Model<any>,
   count: 'exact' | 'estimated',
   state: ExecutionState
 ): Promise<number> {
   if (count === 'estimated') {
-    return await model.estimatedDocumentCount();
+    return await model.estimatedDocumentCount(
+      state.maxTimeMS != null ? { maxTimeMS: state.maxTimeMS } : {}
+    );
   }
 
   const countQuery = model.countDocuments(state.baseFilter as never);
@@ -475,6 +597,12 @@ async function runCount(
   }
   if (state.collation != null) {
     countQuery.collation(state.collation as never);
+  }
+  if (state.maxTimeMS != null) {
+    countQuery.maxTimeMS(state.maxTimeMS);
+  }
+  if (state.hint != null) {
+    countQuery.hint(state.hint);
   }
   return await countQuery.exec();
 }
