@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tgz
+consumer-tests/*/node_modules/
+consumer-tests/*/package-lock.json

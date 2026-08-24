@@ -1,0 +1,59 @@
+{
+  "name": "@abdelrahmanhafez/mongoose-paginate",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Experimental proof of concept for a unified Model.paginate() API for Mongoose",
+  "homepage": "https://github.com/AbdelrahmanHafez/mongoose-paginate",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbdelrahmanHafez/mongoose-paginate.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "keywords": [
+    "mongoose",
+    "pagination",
+    "cursor",
+    "keyset",
+    "offset",
+    "plugin"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/write-cjs-package.mjs",
+    "test": "tsx --test test/*.test.ts",
+    "test:types": "tsc --noEmit -p tsconfig.test.json",
+    "test:consumers": "node consumer-tests/run.mjs",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "mongoose": "9.x"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0",
+    "mongoose": "^9.9.3",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.2"
+  }
+}
