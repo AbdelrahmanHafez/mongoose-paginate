@@ -51,6 +51,7 @@
     "mongoose": "9.x"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "mongodb-memory-server": "^11.2.0",
     "mongoose": "^9.9.3",
     "tsx": "^4.20.0",

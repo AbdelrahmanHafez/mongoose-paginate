@@ -19,16 +19,20 @@ declare module 'mongoose' {
     TLeanResultType = TRawDocType
   > {
     paginate(
-      filter: FilterQuery<TRawDocType>,
+      filter: QueryFilter<TRawDocType>,
       options: (CursorPaginateOptions | OffsetPaginateOptions) & { pageInfo: false }
     ): PaginateQuery<TRawDocType, THydratedDocumentType, null>;
     paginate(
-      filter: FilterQuery<TRawDocType>,
+      filter: QueryFilter<TRawDocType>,
       options: CursorPaginateOptions
     ): PaginateQuery<TRawDocType, THydratedDocumentType, CursorPageInfo>;
     paginate(
-      filter: FilterQuery<TRawDocType>,
+      filter: QueryFilter<TRawDocType>,
       options: OffsetPaginateOptions
     ): PaginateQuery<TRawDocType, THydratedDocumentType, OffsetPageInfo>;
+    paginate(
+      filter: QueryFilter<TRawDocType>,
+      options: CursorPaginateOptions | OffsetPaginateOptions
+    ): PaginateQuery<TRawDocType, THydratedDocumentType, CursorPageInfo | OffsetPageInfo>;
   }
 }

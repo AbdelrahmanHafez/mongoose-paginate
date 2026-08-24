@@ -1,4 +1,4 @@
-import type { FilterQuery, Model, Schema } from 'mongoose';
+import type { QueryFilter, Model, Schema } from 'mongoose';
 import { PaginateQuery } from './paginate-query.js';
 import type { PaginateOptions } from './types.js';
 
@@ -11,7 +11,7 @@ import type { PaginateOptions } from './types.js';
 export function mongoosePaginate(schema: Schema): void {
   schema.static('paginate', function paginate(
     this: Model<unknown>,
-    filter: FilterQuery<unknown>,
+    filter: QueryFilter<unknown>,
     options: PaginateOptions
   ) {
     return new PaginateQuery(this, filter, options);

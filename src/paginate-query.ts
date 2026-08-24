@@ -1,6 +1,6 @@
 import type {
   ClientSession,
-  FilterQuery,
+  QueryFilter,
   FlattenMaps,
   Model,
   PopulateOptions,
@@ -36,7 +36,7 @@ implements PromiseLike<PaginateEnvelope<TDoc, TPageInfo>> {
   private readonly _options: PaginateOptions;
   private readonly _query: Query<unknown[], any>;
 
-  constructor(model: Model<any>, filter: FilterQuery<TRaw>, options: PaginateOptions) {
+  constructor(model: Model<any>, filter: QueryFilter<TRaw>, options: PaginateOptions) {
     validateOptions(options);
     this._model = model;
     this._options = options;
@@ -109,8 +109,8 @@ implements PromiseLike<PaginateEnvelope<TDoc, TPageInfo>> {
     return this;
   }
 
-  getFilter(): FilterQuery<TRaw> {
-    return this._query.getFilter() as FilterQuery<TRaw>;
+  getFilter(): QueryFilter<TRaw> {
+    return this._query.getFilter() as QueryFilter<TRaw>;
   }
 
   getOptions(): Record<string, unknown> {
@@ -122,9 +122,9 @@ implements PromiseLike<PaginateEnvelope<TDoc, TPageInfo>> {
     const state = resolveExecutionState(this._model, query, this._options);
 
     if (this._options.mode === 'cursor') {
-      return await execCursor(this._model, query, this._options, state) as PaginateEnvelope<TDoc, TPageInfo>;
+      return await execCursor(this._model, query, this._options, state) as unknown as PaginateEnvelope<TDoc, TPageInfo>;
     }
-    return await execOffset(this._model, query, this._options, state) as PaginateEnvelope<TDoc, TPageInfo>;
+    return await execOffset(this._model, query, this._options, state) as unknown as PaginateEnvelope<TDoc, TPageInfo>;
   }
 
   then<TResult1 = PaginateEnvelope<TDoc, TPageInfo>, TResult2 = never>(
@@ -415,8 +415,11 @@ function castCursorValues(
     if (schemaType == null) {
       return value;
     }
+    const caster = schemaType as SchemaType & {
+      castForQuery(conditional: string | null, value: unknown, context: unknown): unknown;
+    };
     try {
-      return schemaType.castForQuery(null, value, query as never);
+      return caster.castForQuery(null, value, query);
     } catch {
       throw new InvalidCursorError(
         `Cursor value for path "${field.path}" cannot be cast to the schema type.`

@@ -1,4 +1,4 @@
-import type { FilterQuery, HydratedDocument, Model } from 'mongoose';
+import type { QueryFilter, HydratedDocument, Model } from 'mongoose';
 import type { PaginateQuery } from './paginate-query.js';
 import type { CursorPageInfo, CursorPaginateOptions, OffsetPageInfo, OffsetPaginateOptions } from './types.js';
 import { PaginationError } from './errors.js';
@@ -19,17 +19,21 @@ export class MissingPaginatePluginError extends PaginationError {
  */
 export interface PaginateModel<TRawDocType, THydratedDocumentType = HydratedDocument<TRawDocType>> {
   paginate(
-    filter: FilterQuery<TRawDocType>,
+    filter: QueryFilter<TRawDocType>,
     options: (CursorPaginateOptions | OffsetPaginateOptions) & { pageInfo: false }
   ): PaginateQuery<TRawDocType, THydratedDocumentType, null>;
   paginate(
-    filter: FilterQuery<TRawDocType>,
+    filter: QueryFilter<TRawDocType>,
     options: CursorPaginateOptions
   ): PaginateQuery<TRawDocType, THydratedDocumentType, CursorPageInfo>;
   paginate(
-    filter: FilterQuery<TRawDocType>,
+    filter: QueryFilter<TRawDocType>,
     options: OffsetPaginateOptions
   ): PaginateQuery<TRawDocType, THydratedDocumentType, OffsetPageInfo>;
+  paginate(
+    filter: QueryFilter<TRawDocType>,
+    options: CursorPaginateOptions | OffsetPaginateOptions
+  ): PaginateQuery<TRawDocType, THydratedDocumentType, CursorPageInfo | OffsetPageInfo>;
 }
 
 /**
